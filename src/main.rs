@@ -1,4 +1,3 @@
-use rand::Rng;
 use std::{io, str::FromStr};
 use std::collections::{HashMap, VecDeque};
 
@@ -62,7 +61,6 @@ impl Game {
         let inputs = input_line.split(" ").collect::<Vec<_>>();
 
         // INIT SIZE & TILE LIST
-
         let mut game = Game {
             w: parse_input!(inputs[0], usize),
             h: parse_input!(inputs[1], usize),
@@ -189,7 +187,6 @@ impl Game {
 }
 
 fn main() {
-    // let mut rng = rand::thread_rng();
     // INIT GAME STRUCT
     let mut game = Game::new();
     let mut my_side = 0;
@@ -251,6 +248,7 @@ fn main() {
         // BUILD MANAGEMENT
         let mut sorted_builds = my_buildables.into_iter().map(|(x, y)| (&game.tiles[x][y], weight_map[&(x, y)])).collect::<Vec<(&Tile, i32)>>();
         sorted_builds.sort_by(|(tile_a, va), (tile_b, vb)| {
+            // SORT BY DISTANCE TO CENTER
             distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
         });
         for (tile, _) in sorted_builds {
@@ -261,8 +259,16 @@ fn main() {
                 .neighbors
                 .iter()
                 .filter_map(|(x1, y1)| {
-                    if game.tiles[*x1][*y1].scrap > 0 && game.tiles[*x1][*y1].owner == Owner::OPP {
-                        Some(true)
+                    let nei = &game.tiles[*x1][*y1];
+
+                    // CHECK IF NEIGHBOR HAS AN OPPONENT UNIT
+                    if nei.scrap > 0 && nei.owner == Owner::OPP && nei.units > 0  {
+                        // CHECKS IF IT HAS A FREE OPPONENT TILE NEXT TO IT
+                        if nei.neighbors.iter().filter(|(x2, y2)| game.tiles[*x2][*y2].owner == Owner::OPP).count() > 0 {
+                            Some(true)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -278,6 +284,7 @@ fn main() {
         // SPAWN MANAGEMENT
         let mut sorted_spawns = my_spawnables.into_iter().map(|(x, y)| (&game.tiles[x][y], weight_map[&(x, y)])).collect::<Vec<(&Tile, i32)>>();
         sorted_spawns.sort_by(|(tile_a, va), (tile_b, vb)| {
+            // SORT BY DISTANCE TO CENTER
             distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
         });
 
