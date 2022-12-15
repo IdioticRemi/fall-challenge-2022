@@ -1,5 +1,5 @@
-use std::{io, str::FromStr};
-use std::collections::{HashMap, VecDeque};
+use std::{io, str::FromStr, cmp::Ordering};
+use std::collections::{HashMap, VecDeque, HashSet};
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => {
@@ -18,6 +18,16 @@ enum Owner {
     NEUTRAL = -1,
 }
 
+impl ToString for Owner {
+    fn to_string(&self) -> String {
+        match self {
+            Owner::ME => ".".to_string(),
+            Owner::OPP => "x".to_string(),
+            Owner::NEUTRAL => "-".to_string(),
+        }
+    }
+}
+
 impl FromStr for Owner {
     type Err = ();
 
@@ -28,6 +38,26 @@ impl FromStr for Owner {
             "-1" => Ok(Owner::NEUTRAL),
             _ => Err(()),
         }
+    }
+}
+
+impl Ord for Owner {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (*self, *other) {
+            (Owner::ME, Owner::ME) => Ordering::Equal,
+            (Owner::ME, _) => Ordering::Greater,
+            (_, Owner::ME) => Ordering::Less,
+            (Owner::NEUTRAL, Owner::NEUTRAL) => Ordering::Equal,
+            (Owner::NEUTRAL, _) => Ordering::Greater,
+            (_, Owner::NEUTRAL) => Ordering::Less,
+            (Owner::OPP, Owner::OPP) => Ordering::Equal,
+        }
+    }
+}
+
+impl PartialOrd for Owner {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -61,6 +91,7 @@ impl Game {
         let inputs = input_line.split(" ").collect::<Vec<_>>();
 
         // INIT SIZE & TILE LIST
+
         let mut game = Game {
             w: parse_input!(inputs[0], usize),
             h: parse_input!(inputs[1], usize),
@@ -184,12 +215,70 @@ impl Game {
 
         map
     }
+
+    fn get_map_zones(&self) -> HashMap<Position, Option<Owner>> {
+        let mut map: HashMap<Position, Option<Owner>> = HashMap::new();
+
+        for y in 0..self.h {
+            for x in 0..self.w {
+                if map.contains_key(&(x, y)) {
+                    continue;
+                }
+                if self.tiles[x][y].scrap == 0 || self.tiles[x][y].is_recycler {
+                    map.insert((x, y), None);
+                    continue;
+                }
+
+                let (mapped, owner) = self.get_area((x, y));
+
+                for (x1, y1) in mapped.iter() {
+                    map.insert((*x1, *y1), Some(owner));
+                }
+            }
+        }
+
+        map
+    }
+
+    fn get_area(&self, start: Position) -> (HashSet<Position>, Owner) {
+        let mut queue: VecDeque<Position> = VecDeque::new();
+        let mut visited: HashSet<Position> = HashSet::new();
+        let mut zone_owner = self.tiles[start.0][start.1].owner;
+
+        queue.push_back(start);
+
+        while queue.len() > 0 {
+            let (x, y) = queue.pop_front().unwrap();
+            let tile = &self.tiles[x][y];
+
+            if visited.contains(&(x, y)) {
+                continue;
+            }
+
+            visited.insert((x, y));
+
+            if tile.owner == Owner::OPP {
+                zone_owner = Owner::OPP
+            } else if zone_owner == Owner::ME && tile.owner == Owner::NEUTRAL {
+                zone_owner = Owner::NEUTRAL
+            }
+
+            for next in tile.neighbors.iter().filter(|(x1, y1)| {
+                let tile = &self.tiles[*x1][*y1];
+
+                !tile.is_recycler && tile.scrap > 0 && !visited.contains(&(*x1, *y1))
+            }) {
+                queue.push_back(*next);
+            }
+        }
+
+        (visited, zone_owner)
+    }
 }
 
 fn main() {
     // INIT GAME STRUCT
     let mut game = Game::new();
-    let mut my_side = 0;
 
     // MAIN GAME LOOP
     loop {
@@ -197,15 +286,24 @@ fn main() {
         let [mut matter, _] = game.parse_matter();
 
         // PARSE TILES
-        let [mut my_units, mut my_spawnables, mut my_buildables] = game.parse_tiles();
+        let [my_units, my_spawnables, my_buildables] = game.parse_tiles();
 
         // SET MY_SIDE VALUE
-        if my_side == 0 && my_units.len() > 0 {
-            my_side = if my_units[0].0 > game.w / 2 { 1 } else { -1 };
-        }
 
         // GET WEIGHT MAP
         let weight_map = game.get_weight_map();
+        let zone_map = game.get_map_zones();
+
+        // DEBUG ZONE OWNERSHIP
+        // for y in 0..game.h {
+        //     for x in 0..game.w {
+        //         match zone_map[&(x, y)] {
+        //             Some(owner) => eprint!("{} ", owner.to_string()),
+        //             None => eprint!("  ")
+        //         }
+        //     }
+        //     eprint!("\n");
+        // }
 
         // INIT THE ACTIONS ARRAY
         let mut actions: Vec<String> = vec![];
@@ -216,9 +314,9 @@ fn main() {
                 .neighbors
                 .iter()
                 .filter_map(|(x1, y1)| {
-                    // Filter going to the enemy tiles
                     let tile = &game.tiles[*x1][*y1];
 
+                    // JUST MAKING SURE WE DONT GO TO UN-WALKABLE TILES
                     if tile.scrap != 0 && !tile.is_recycler {
                         Some(tile)
                     } else {
@@ -227,11 +325,13 @@ fn main() {
                 })
                 .collect::<Vec<&Tile>>();
 
+            // SORT NEIGHBORS BY THEIR DISTANCE TO A NEUTRAL/ENEMY TILE
             filtered.sort_by_key(|tile| weight_map[&(tile.x, tile.y)]);
 
-            let mut path_count = filtered.len();
+            let path_count = filtered.len();
 
             if path_count > 0 {
+                // SEND UNITS EQUALY PRIORITIZING WORTHEST NEIGHBOR
                 for (i, tile) in filtered.iter().enumerate() {
                     let qty = unit.units / path_count + (i < unit.units % path_count) as usize;
 
@@ -247,8 +347,8 @@ fn main() {
 
         // BUILD MANAGEMENT
         let mut sorted_builds = my_buildables.into_iter().map(|(x, y)| (&game.tiles[x][y], weight_map[&(x, y)])).collect::<Vec<(&Tile, i32)>>();
-        sorted_builds.sort_by(|(tile_a, va), (tile_b, vb)| {
-            // SORT BY DISTANCE TO CENTER
+        sorted_builds.sort_by(|(tile_a, _), (tile_b, _)| {
+            // SORT BY: Distance to center of the map
             distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
         });
         for (tile, _) in sorted_builds {
@@ -261,9 +361,10 @@ fn main() {
                 .filter_map(|(x1, y1)| {
                     let nei = &game.tiles[*x1][*y1];
 
-                    // CHECK IF NEIGHBOR HAS AN OPPONENT UNIT
+                    // CHECK IF NEIGHBOR HAS ENEMY UNITS
                     if nei.scrap > 0 && nei.owner == Owner::OPP && nei.units > 0  {
-                        // CHECKS IF IT HAS A FREE OPPONENT TILE NEXT TO IT
+                        // CHECK IF NEIGHBOR HAS ANY OTHER ENEMY TILE NEXT TO IT
+                        // NOTE: This prevents building in my own area when an enemy unit enters it alone
                         if nei.neighbors.iter().filter(|(x2, y2)| game.tiles[*x2][*y2].owner == Owner::OPP).count() > 0 {
                             Some(true)
                         } else {
@@ -282,10 +383,19 @@ fn main() {
         }
 
         // SPAWN MANAGEMENT
-        let mut sorted_spawns = my_spawnables.into_iter().map(|(x, y)| (&game.tiles[x][y], weight_map[&(x, y)])).collect::<Vec<(&Tile, i32)>>();
-        sorted_spawns.sort_by(|(tile_a, va), (tile_b, vb)| {
-            // SORT BY DISTANCE TO CENTER
-            distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
+        let mut sorted_spawns = my_spawnables.into_iter().filter_map(|(x, y)| {
+            // FILTER OUT TILES: If it's zone owner is already me
+            // NOTE: I do this so i dont spawn entities in a zone that is secured entierly
+            if zone_map[&(x, y)] == Some(Owner::ME) { None } else { Some((&game.tiles[x][y], zone_map[&(x, y)])) }
+        }).collect::<Vec<(&Tile, Option<Owner>)>>();
+        sorted_spawns.sort_by(|(tile_a, o_a), (tile_b, o_b)| {
+            // SORT BY AREA TYPE: Spawn on hostile terrain first then neutral
+            // NOTE: If tile A and B have the same area type, we spawn closest to the map center
+            if o_a == o_b {
+                distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
+            } else {
+                o_a.cmp(o_b)
+            }
         });
 
         for (tile, _) in sorted_spawns {
