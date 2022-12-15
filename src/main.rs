@@ -1,5 +1,6 @@
 use rand::Rng;
 use std::{io, str::FromStr};
+use std::collections::{HashMap, VecDeque};
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => {
@@ -151,20 +152,63 @@ impl Game {
 
         [my_units, my_spawnables, my_buildables]
     }
+
+    fn get_weight_map(&self) -> HashMap<Position, i32> {
+        let mut map: HashMap<Position, i32> = HashMap::new();
+        let mut queue: VecDeque<Position> = VecDeque::new();
+
+        for y in 0..self.h {
+            for x in 0..self.w {
+                queue.push_back((x, y));
+            }
+        }
+
+        while queue.len() > 0 {
+            let (x, y) = queue.pop_front().unwrap();
+            let tile = &self.tiles[x][y];
+
+            if tile.scrap > 0 && tile.owner != Owner::ME {
+                map.insert((x, y), 0);
+                continue;
+            }
+
+            let tmp = tile.neighbors.iter().filter_map(|(x1, y1)| map.get(&(*x1, *y1)).map(|t| Some(t))).collect::<Vec<Option<&i32>>>();
+
+            if tmp.len() == 0 {
+                queue.push_back((x, y));
+                continue;
+            }
+
+            let min = tmp.into_iter().min().unwrap().unwrap();
+
+            map.insert((x, y), min + 1);
+        }
+
+        map
+    }
 }
 
 fn main() {
-    let mut rng = rand::thread_rng();
+    // let mut rng = rand::thread_rng();
     // INIT GAME STRUCT
     let mut game = Game::new();
+    let mut my_side = 0;
 
     // MAIN GAME LOOP
     loop {
         // PARSE MATTER VALUES
-        let [mut matter, matter_opp] = game.parse_matter();
+        let [mut matter, _] = game.parse_matter();
 
         // PARSE TILES
         let [mut my_units, mut my_spawnables, mut my_buildables] = game.parse_tiles();
+
+        // SET MY_SIDE VALUE
+        if my_side == 0 && my_units.len() > 0 {
+            my_side = if my_units[0].0 > game.w / 2 { 1 } else { -1 };
+        }
+
+        // GET WEIGHT MAP
+        let weight_map = game.get_weight_map();
 
         // INIT THE ACTIONS ARRAY
         let mut actions: Vec<String> = vec![];
@@ -173,93 +217,58 @@ fn main() {
         for unit in my_units.into_iter().map(|(x, y)| &game.tiles[x][y]) {
             let mut filtered = unit
                 .neighbors
-                .clone()
-                .into_iter()
+                .iter()
                 .filter_map(|(x1, y1)| {
-                    if game.tiles[x1][y1].scrap != 0 && game.tiles[x1][y1].owner != Owner::ME {
-                        Some(&game.tiles[x1][y1])
+                    // Filter going to the enemy tiles
+                    let tile = &game.tiles[*x1][*y1];
+
+                    if tile.scrap != 0 && !tile.is_recycler {
+                        Some(tile)
                     } else {
                         None
                     }
                 })
                 .collect::<Vec<&Tile>>();
 
-            // eprintln!("{} {} has {} valid sides", unit.x, unit.y, filtered.len());
-            if filtered.len() > 0 {
-                if filtered.len() > unit.units {
-                    for _ in 0..unit.units {
-                        let i = rng.gen_range(0..filtered.len());
-                        let mut drained = filtered.drain(i..(i + 1));
-                        let target = drained.next().unwrap();
+            filtered.sort_by_key(|tile| weight_map[&(tile.x, tile.y)]);
 
+            let mut path_count = filtered.len();
+
+            if path_count > 0 {
+                for (i, tile) in filtered.iter().enumerate() {
+                    let qty = unit.units / path_count + (i < unit.units % path_count) as usize;
+
+                    if qty > 0 {
                         actions.push(format!(
-                            "MOVE 1 {} {} {} {}",
-                            unit.x, unit.y, target.x, target.y
+                            "MOVE {} {} {} {} {}",
+                            qty, unit.x, unit.y, tile.x, tile.y
                         ));
-                    }
-                } else {
-                    for (i, tile) in filtered.iter().enumerate() {
-                        let mut qty = unit.units / filtered.len();
-                        if i < unit.units % filtered.len() {
-                            qty += 1;
-                        }
-
-                        if qty > 0 {
-                            actions.push(format!(
-                                "MOVE {} {} {} {} {}",
-                                qty, unit.x, unit.y, tile.x, tile.y
-                            ));
-                        }
-                    }
-                }
-            } else if unit.neighbors.len() > 0 {
-                if unit.neighbors.len() > unit.units {
-                    let mut cloned = unit.neighbors.clone();
-                    for _ in 0..unit.units {
-                        let i = rng.gen_range(0..cloned.len());
-                        let mut drained = cloned.drain(i..(i + 1));
-                        let target = drained.next().unwrap();
-
-                        actions.push(format!(
-                            "MOVE 1 {} {} {} {}",
-                            unit.x, unit.y, target.0, target.1
-                        ));
-                    }
-                } else {
-                    for (i, (x1, y1)) in unit.neighbors.iter().enumerate() {
-                        let mut qty = unit.units / unit.neighbors.len();
-                        if i < unit.units % unit.neighbors.len() {
-                            qty += 1;
-                        }
-
-                        if qty > 0 {
-                            actions
-                                .push(format!("MOVE {} {} {} {} {}", qty, unit.x, unit.y, x1, y1));
-                        }
                     }
                 }
             }
         }
 
         // BUILD MANAGEMENT
-        for tile in my_buildables.into_iter().map(|(x, y)| &game.tiles[x][y]) {
+        let mut sorted_builds = my_buildables.into_iter().map(|(x, y)| (&game.tiles[x][y], weight_map[&(x, y)])).collect::<Vec<(&Tile, i32)>>();
+        sorted_builds.sort_by(|(tile_a, va), (tile_b, vb)| {
+            distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
+        });
+        for (tile, _) in sorted_builds {
             if matter < 10 {
                 break;
             }
-            let mut filtered = tile
+            let opp_neighbors_cnt = tile
                 .neighbors
-                .clone()
-                .into_iter()
+                .iter()
                 .filter_map(|(x1, y1)| {
-                    if game.tiles[x1][y1].scrap != 0 && game.tiles[x1][y1].owner == Owner::OPP {
-                        Some(&game.tiles[x1][y1])
+                    if game.tiles[*x1][*y1].scrap > 0 && game.tiles[*x1][*y1].owner == Owner::OPP {
+                        Some(true)
                     } else {
                         None
                     }
-                })
-                .collect::<Vec<&Tile>>();
+                }).count();
 
-            if filtered.len() != 0 {
+            if opp_neighbors_cnt > 0 {
                 matter -= 10;
 
                 actions.push(format!("BUILD {} {}", tile.x, tile.y));
@@ -267,28 +276,31 @@ fn main() {
         }
 
         // SPAWN MANAGEMENT
-        for tile in my_spawnables.into_iter().map(|(x, y)| &game.tiles[x][y]) {
+        let mut sorted_spawns = my_spawnables.into_iter().map(|(x, y)| (&game.tiles[x][y], weight_map[&(x, y)])).collect::<Vec<(&Tile, i32)>>();
+        sorted_spawns.sort_by(|(tile_a, va), (tile_b, vb)| {
+            distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
+        });
+
+        for (tile, _) in sorted_spawns {
             if matter < 10 {
                 break;
             }
-            let mut filtered = tile
+
+            let neutral_neighbors_cnt = tile
                 .neighbors
-                .clone()
-                .into_iter()
+                .iter()
                 .filter_map(|(x1, y1)| {
-                    if game.tiles[x1][y1].scrap != 0 && game.tiles[x1][y1].owner != Owner::ME {
-                        Some(&game.tiles[x1][y1])
+                    if game.tiles[*x1][*y1].scrap > 0 && game.tiles[*x1][*y1].owner == Owner::NEUTRAL {
+                        Some(true)
                     } else {
                         None
                     }
-                })
-                .collect::<Vec<&Tile>>();
+                }).count();
 
-            if filtered.len() > 0 {
-                let qty = filtered.len().min(matter / 10);
-                matter -= qty * 10;
+            if neutral_neighbors_cnt > 0 {
+                matter -= 10;
 
-                actions.push(format!("SPAWN {} {} {}", qty, tile.x, tile.y));
+                actions.push(format!("SPAWN 1 {} {}", tile.x, tile.y));
             }
         }
 
