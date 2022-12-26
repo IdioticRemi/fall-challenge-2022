@@ -492,7 +492,7 @@ fn main() {
         }) {
             let path = game.bfs_until((unit.x, unit.y), bfs_nearest_not_mine);
 
-            // eprintln!("{:?} going through {:?}", (unit.x, unit.y), path);
+            eprintln!("{:?} going through {:?}", (unit.x, unit.y), path);
 
             if !path.is_empty() {
                 actions.push(format!(
@@ -540,8 +540,9 @@ fn main() {
         // BUILD MANAGEMENT
         let mut sorted_builds = my_buildables.into_iter().map(|(x, y)| (&game.tiles[x][y], weight_map[&(x, y)])).collect::<Vec<(&Tile, i32)>>();
         sorted_builds.sort_by(|(tile_a, _), (tile_b, _)| {
-            // SORT BY: Recycler value early then distance to center
-            if early_recyclers < 3 && (turn % 2 == 0 || turn > 5) {
+            // SORT BY: Distance to center of the map
+            // distance(&(tile_a.x, tile_a.y), &(game.w / 2, game.h / 2)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, game.h / 2)))
+            if early_recyclers < 3 {
                 game.get_recycler_worth((tile_b.x, tile_b.y)).cmp(&game.get_recycler_worth((tile_a.x, tile_a.y)))
             } else {
                 distance(&(tile_a.x, tile_a.y), &(game.w / 2, tile_a.y)).cmp(&distance(&(tile_b.x, tile_b.y), &(game.w / 2, tile_b.y)))
@@ -599,28 +600,19 @@ fn main() {
             // NOTE: If tile A and B have the same area type, we spawn closest to the enemy tiles
 
             if o_a == o_b {
-                let mut dst_a: usize = 0;
-                let mut dst_b: usize = 0;
-
                 if o_a == &Owner::OPP {
-                    dst_a = game.bfs_until((tile_a.x, tile_a.y), bfs_nearest_enemy_unit).len();
-                    dst_b = game.bfs_until((tile_b.x, tile_b.y), bfs_nearest_enemy_unit).len();
-                }
-                else if o_a == &Owner::NEUTRAL {
-                    let neighbor_filter = |(x1, y1): &(usize, usize)| game.tiles[*x1][*y1].scrap > 0 && game.tiles[*x1][*y1].owner == Owner::NEUTRAL;
+                    let dst_a = game.bfs_until((tile_a.x, tile_a.y), bfs_nearest_enemy_unit).len();
+                    let dst_b = game.bfs_until((tile_b.x, tile_b.y), bfs_nearest_enemy_unit).len();
 
-                    return tile_b.neighbors.iter().filter(|p| neighbor_filter(p)).count().cmp(&tile_a.neighbors.iter().filter(|p| neighbor_filter(p)).count())
-                }
-                else {
-                    return Ordering::Equal;
-                }
-
-                if dst_a == 0 {
-                    Ordering::Greater
-                } else if dst_b == 0 {
-                    Ordering::Less
+                    if dst_a == 0 {
+                        Ordering::Greater
+                    } else if dst_b == 0 {
+                        Ordering::Less
+                    } else {
+                        dst_a.cmp(&dst_b)
+                    }
                 } else {
-                    dst_a.cmp(&dst_b)
+                    Ordering::Equal
                 }
             } else {
                 o_a.cmp(o_b)
