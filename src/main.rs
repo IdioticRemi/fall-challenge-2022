@@ -487,7 +487,7 @@ fn main() {
         // MOVEMENT MANAGEMENT
         for unit in my_units.into_iter().filter_map(|(x, y)| {
             // FILTER OUT TILES: If it's zone owner is already me
-            // NOTE: I do this so i dont spawn entities in a zone that is secured entierly
+            // NOTE: I do this so i stop moving entities in a zone that is secured entierly
             if zone_map[&(x, y)].is_some() && zone_map[&(x, y)].unwrap().0 == Owner::ME { None } else { Some(&game.tiles[x][y]) }
         }) {
             let path = game.bfs_until((unit.x, unit.y), bfs_nearest_not_mine);
